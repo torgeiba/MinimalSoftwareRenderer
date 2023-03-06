@@ -48,6 +48,19 @@ v3 cross(v3 a, v3 b)
 
 f32 dot(v3 a, v3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 
+f32 absf(f32 x) { return x > -x ? x : -x; }
+
+f32 rcp_sqrt(f32 number) // infamous 'fast reciprocal square root' function
+{
+	i32 i = 0x5f3759df - ((*(i32*)&number) >> 1);
+	f32 y = *(f32*)&i;
+	y = y * (1.5f - (number * 0.5f * y * y)); // 1st iteration
+	y = y * (1.5f - (number * 0.5f * y * y)); // 2nd iteration
+	return y;
+}
+
+v3 normalize(v3 V) { return V * rcp_sqrt(dot(V, V)); }
+
 struct visbuf
 {
 	i32 width, height;
@@ -65,6 +78,11 @@ visbuf make_visbuf(i32 width, i32 height)
 	return result;
 }
 
+// "<=" seems to work better than "<" for whatever reason
+// We get overlap with "<=" but get jagged edge artifacts with "<" along shared edges crossing pixel centers
+// rearranges the expression:   z <= decode(vb.z_buf[i * vb.width + j])
+f32 compare_z(f32 z, i32 i, i32 j, const visbuf& vb) { return (z + 1.f) * vb.z_buf[i * vb.width + j] <= 1.f; } 
+
 f32 encode_z(f32 z) { return 1.f/(1.f + z);  }
 f32 decode_z(f32 z) { return (1.f/z) - 1.f; }
 
@@ -81,19 +99,12 @@ void rasterize(i32 i, i32 j, u32 k, tri* prims, visbuf& vb)
 {
 	v3 D = get_viewdir(i, j, vb.width, vb.height);
 	tri prim = prims[k];
-	v3 V0 = prim.vert[0] / -prim.vert[0].z;	// Assume z is negative, so -z == abs(z), for now!
-	v3 V1 = prim.vert[1] / -prim.vert[1].z;	// Assume z is negative, so -z == abs(z), for now!
-	v3 V2 = prim.vert[2] / -prim.vert[2].z; // Assume z is negative, so -z == abs(z), for now!
-	f32 e01 = -dot(cross(V0, V1), D);
-	f32 e12 = -dot(cross(V1, V2), D);
-	f32 e20 = -dot(cross(V2, V0), D);
+	v3 V0 = prim.vert[0];
+	v3 V1 = prim.vert[1];
+	v3 V2 = prim.vert[2];
 
-	if (!(e01 >= 0.f && e12 >= 0.f && e20 >= 0.f)) return;
-
-	v3 N = cross(V1 - V0, V2 - V0);
-	
+	v3 N = cross(V1 - V0, V2 - V0); // Must calculate the normal before modifying the vertex positions!
 	f32 NdotV0 = dot(N, V0);
-	f32 DdotN = dot(D, N); 
 
 	// case 0: if(NdotV0 < 0 && DdotN < 0) // in front of camera pointing towards it ( frontfacing ) 
 	// case 1: if(NdotV0 < 0 && DdotN > 0) // behind camera pointed towards camera 
@@ -102,12 +113,35 @@ void rasterize(i32 i, i32 j, u32 k, tri* prims, visbuf& vb)
 
 	if (NdotV0 > 0.f) return; // excludes case 2 and case 3
 
+	//V0 = V0 / absf(prim.vert[0].z);	// Assume z is negative, so -z == abs(z), for now!
+	//V1 = V1 / absf(prim.vert[1].z);	// Assume z is negative, so -z == abs(z), for now!
+	//V2 = V2 / absf(prim.vert[2].z);	// Assume z is negative, so -z == abs(z), for now!
+
+	v3 V01 = cross(V0, V1);
+	v3 V12 = cross(V1, V2);
+	v3 V20 = cross(V2, V0);
+
+	f32 e01 = -dot(V01, D);
+	f32 e12 = -dot(V12, D);
+	f32 e20 = -dot(V20, D);
+
+	if (!(e01 >= 0.f && e12 >= 0.f && e20 >= 0.f)) return;
+
+	f32 DdotN = dot(D, N); 
+
 	// For camerapos C = 0, triangle normal N, view dir D
 	// Solve dot(N, C-v0) + t * dot(D, N) == 0, for t
 
-	f32 t = NdotV0 / DdotN; // t < 0 implies case 1, therefore, require that t > 0
+	// t < 0 implies case 1, therefore, require that t > 0
+	// The expression for t can be flipped to immediately get reciprocal z.
+	// To immediately get 1/(1+z) from z = z_nom/z_den: z_den/(z_den+z_nom)
+	f32 t = NdotV0 / DdotN;
 	f32 z = t * -D.z;
-	if (t > 0.f && z < decode_z(vb.z_buf[i*vb.width + j]))
+	if (t > 0.f 
+		&& 
+		//z < decode_z(vb.z_buf[i*vb.width + j])
+		compare_z(z, i, j, vb)
+		)
 	{
 		vb.z_buf[i * vb.width + j] = encode_z(z);
 		vb.prim_buf[i * vb.width + j] = k+1;
@@ -121,21 +155,9 @@ struct ShadingData
 	v3 viewdir;
 	v3 normaldir;
 };
-
-f32 rcp_sqrt(f32 number)
-{
-	i32 i = 0x5f3759df - ((*(i32*)&number) >> 1);
-	f32 y = *(f32*)&i;
-	y = y * (1.5f - (number * 0.5f * y * y)); // 1st iteration
-	y = y * (1.5f - (number * 0.5f * y * y)); // 2nd iteration
-	return y;
-}
-
-v3 normalize(v3 V) { return V *  rcp_sqrt(dot(V, V)); }
-
 ShadingData get_shading_data(i32 i, i32 j, tri* prims, const visbuf& vb)
 {
-	u32 primidx = vb.prim_buf[i*vb.width + j] - 1;
+	u32 primidx = vb.prim_buf[i * vb.width + j] - 1;
 	tri prim = prims[primidx];
 	v3 D = get_viewdir(i, j, vb.width, vb.height);
 	f32 Z = decode_z(vb.z_buf[i * vb.width + j]);
@@ -190,12 +212,22 @@ u32 shade(i32 i, i32 j, tri* prims, const visbuf& vb)
 		f32 NdotV = dot(s.normaldir, s.viewdir);
 		f32 diffuse = NdotV >= 0.f ? NdotV : 0.f;
 		v3 baseColor = rgb_palette[primidx];
-		v3 color = v3{ diffuse,diffuse,diffuse }*baseColor;
+		v3 color = v3{ diffuse,diffuse,diffuse } *baseColor;
 		u32 LDR = HDRtoLDR(color);
 		return LDR;
 	}
 	else
-		return 0xFF000000;
+		return 0xFF330011;// 0xFF000000;
+}
+
+tri transform(u32 k, tri* prim)
+{
+	tri result = tri{{
+		prim[k].vert[0] * 0.5 - v3{0.f, 0.f, 0.5f},
+		prim[k].vert[1] * 0.5 - v3{0.f, 0.f, 0.5f},
+		prim[k].vert[2] * 0.5 - v3{0.f, 0.f, 0.5f}
+	}};
+	return result;
 }
 
 i32 main(i32 argc, char* argv[])
@@ -227,17 +259,24 @@ i32 main(i32 argc, char* argv[])
 		{ { v[3], v[4], v[7] }}
 	};
 
-	u32* img_out = (u32*)calloc(width * height, sizeof(u32)); if (!img_out) return 0;
+	tri transformed_prims[num_prims];
+
+	u32* img_out = (u32*)calloc(width * height, sizeof(u32));
+	if (!img_out) return 0;
+
 	visbuf vb = make_visbuf(width, height);
+
+	for (u32 k = 0; k < num_prims; k++)
+		transformed_prims[k] = transform(k, prims); // transform per triangle, should transform per vertex instead...
 
 	for (i32 i = 0; i < height; ++i)
 		for (i32 j = 0; j < width; ++j)
 			for (u32 k = 0; k < num_prims; k++)				
-				rasterize(i, j, k, prims, vb);
+				rasterize(i, j, k, transformed_prims, vb);
 
 	for (i32 i = 0; i < height; ++i)
 		for (i32 j = 0; j < width; ++j)
-			img_out[i*width + j] = shade(i, j, prims, vb);
+			img_out[i*width + j] = shade(i, j, transformed_prims, vb);
 
 	stbi_write_bmp("imgout.bmp", width, height, 4, img_out);
 }
