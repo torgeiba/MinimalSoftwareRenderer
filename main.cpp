@@ -1,4 +1,5 @@
-#include "stdlib.h" // for calloc
+
+#include <corecrt_malloc.h> // for calloc
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #pragma warning(disable:4996)
@@ -16,9 +17,9 @@ typedef unsigned long long u64;
 typedef float f32;
 typedef double f64;
 
-struct v2 { f32 x, y; };
+//struct v2 { f32 x, y; };
 struct v3 { f32 x, y, z; };
-struct v4 { f32 x, y, z, w; };
+//struct v4 { f32 x, y, z, w; };
 struct tri { v3 vert[3]; };
 
 v3 operator+(v3 a, v3 b) { return v3{ a.x + b.x, a.y + b.y, a.z + b.z }; }
@@ -79,8 +80,8 @@ visbuf make_visbuf(i32 width, i32 height)
 }
 
 // "<=" seems to work better than "<" for whatever reason
-// We get overlap with "<=" but get jagged edge artifacts with "<" along shared edges crossing pixel centers
-// rearranges the expression:   z <= decode(vb.z_buf[i * vb.width + j])
+// We get overlap with "<=" but get jagged edge artifacts with "<" along shared edges crossing pixel centers.
+// This function rearranges the expression:   z <= decode(vb.z_buf[i * vb.width + j])
 f32 compare_z(f32 z, i32 i, i32 j, const visbuf& vb) { return (z + 1.f) * vb.z_buf[i * vb.width + j] <= 1.f; } 
 
 f32 encode_z(f32 z) { return 1.f/(1.f + z);  }
@@ -89,9 +90,9 @@ f32 decode_z(f32 z) { return (1.f/z) - 1.f; }
 v3 get_viewdir(i32 i, i32 j, i32 width, i32 height)
 {
 	return {
-		(f32)(1 - width + 2 * j) / (f32)width,
-		-(f32)(1 - height + 2 * i) / (f32)height,
-		-1.f
+		(f32)(1 - width + 2 * j) / (f32)width,     // X: From -1 at the left, to +1 at the right of the screen
+		-(f32)(1 - height + 2 * i) / (f32)height,  // Y: From -1 at the bottom, to +1 at the top of the screen
+		-1.f									   // Z: Along negative z axis
 	};
 }
 
@@ -113,17 +114,17 @@ void rasterize(i32 i, i32 j, u32 k, tri* prims, visbuf& vb)
 
 	if (NdotV0 > 0.f) return; // excludes case 2 and case 3
 
-	//V0 = V0 / absf(prim.vert[0].z);	// Assume z is negative, so -z == abs(z), for now!
-	//V1 = V1 / absf(prim.vert[1].z);	// Assume z is negative, so -z == abs(z), for now!
-	//V2 = V2 / absf(prim.vert[2].z);	// Assume z is negative, so -z == abs(z), for now!
+	//V0 = V0 / absf(prim.vert[0].z);
+	//V1 = V1 / absf(prim.vert[1].z);
+	//V2 = V2 / absf(prim.vert[2].z);
 
-	v3 V01 = cross(V0, V1);
-	v3 V12 = cross(V1, V2);
-	v3 V20 = cross(V2, V0);
+	v3 V01 = cross(V0, V1); // counter clockwise order
+	v3 V12 = cross(V1, V2); // counter clockwise order
+	v3 V20 = cross(V2, V0); // counter clockwise order
 
-	f32 e01 = -dot(V01, D);
-	f32 e12 = -dot(V12, D);
-	f32 e20 = -dot(V20, D);
+	f32 e01 = -dot(V01, D); // edge normal vectors point outwards, either negate here, or reverse orientation of edge vectors.
+	f32 e12 = -dot(V12, D);	// edge normal vectors point outwards, either negate here, or reverse orientation of edge vectors.
+	f32 e20 = -dot(V20, D);	// edge normal vectors point outwards, either negate here, or reverse orientation of edge vectors.
 
 	if (!(e01 >= 0.f && e12 >= 0.f && e20 >= 0.f)) return;
 
@@ -148,14 +149,14 @@ void rasterize(i32 i, i32 j, u32 k, tri* prims, visbuf& vb)
 	}
 }
 
-struct ShadingData
+struct shading_data
 {
 	v3 barycentric;
 	v3 pos;
 	v3 viewdir;
 	v3 normaldir;
 };
-ShadingData get_shading_data(i32 i, i32 j, tri* prims, const visbuf& vb)
+shading_data get_shading_data(i32 i, i32 j, tri* prims, const visbuf& vb)
 {
 	u32 primidx = vb.prim_buf[i * vb.width + j] - 1;
 	tri prim = prims[primidx];
@@ -163,19 +164,23 @@ ShadingData get_shading_data(i32 i, i32 j, tri* prims, const visbuf& vb)
 	f32 Z = decode_z(vb.z_buf[i * vb.width + j]);
 	v3 pos = D * Z;
 	v3 N = normalize(cross(prim.vert[1] - prim.vert[0], prim.vert[2] - prim.vert[0]));
-	ShadingData result;
-	result.barycentric = v3{};
+	shading_data result;
+	result.barycentric = v3{
+		dot(N, cross(prim.vert[1] - prim.vert[0], pos - prim.vert[0])),
+		dot(N, cross(pos - prim.vert[0], prim.vert[2] - prim.vert[0])),
+		dot(N, cross(prim.vert[2] - prim.vert[1], pos - prim.vert[1]))
+	};
 	result.pos = pos;
 	result.viewdir = normalize(D) * -1.f;
 	result.normaldir = N;
 	return result;
 }
 
-f32 gamma_encode(f32 Clinear)
+f32 gamma_encode(f32 C_linear)
 {
-	Clinear >= 0.f ? Clinear : 0.f;
-	Clinear <= 1.f ? Clinear : 1.f;
-	return 1. / rcp_sqrt(Clinear);
+	C_linear >= 0.f ? C_linear : 0.f;
+	C_linear <= 1.f ? C_linear : 1.f;
+	return 1. / rcp_sqrt(C_linear);
 }
 
 u32 HDRtoLDR(v3 RGB)
@@ -206,13 +211,14 @@ u32 shade(i32 i, i32 j, tri* prims, const visbuf& vb)
 
 	if (primbufval)
 	{
-		u32 primidx = primbufval - 1;
+		u32 primidx = primbufval - 1; // decode visibility buffer
 		tri prim = prims[primidx];
-		ShadingData s = get_shading_data(i, j, prims, vb);
+		shading_data s = get_shading_data(i, j, prims, vb);
 		f32 NdotV = dot(s.normaldir, s.viewdir);
 		f32 diffuse = NdotV >= 0.f ? NdotV : 0.f;
 		v3 baseColor = rgb_palette[primidx];
-		v3 color = v3{ diffuse,diffuse,diffuse } *baseColor;
+		v3 color = v3{ diffuse,diffuse,diffuse } * baseColor;
+		//color = s.barycentric;
 		u32 LDR = HDRtoLDR(color);
 		return LDR;
 	}
@@ -232,7 +238,7 @@ tri transform(u32 k, tri* prim)
 
 i32 main(i32 argc, char* argv[])
 {
-	const i32 width = 600, height = 600;
+	const i32 width = 600, height = 600; // width and height have to be equal as long as we don't aspect correct
 	const i32 num_prims = 10;
 	v3 v[8]
 	{
@@ -260,23 +266,27 @@ i32 main(i32 argc, char* argv[])
 	};
 
 	tri transformed_prims[num_prims];
-
 	u32* img_out = (u32*)calloc(width * height, sizeof(u32));
 	if (!img_out) return 0;
 
-	visbuf vb = make_visbuf(width, height);
+	// void draw(width, height, vb, num_prims, prims)
+	{
+		visbuf vb = make_visbuf(width, height);
 
-	for (u32 k = 0; k < num_prims; k++)
-		transformed_prims[k] = transform(k, prims); // transform per triangle, should transform per vertex instead...
+		for (u32 k = 0; k < num_prims; ++k)
+			transformed_prims[k] = transform(k, prims); // transform per triangle, should transform per vertex instead...
 
-	for (i32 i = 0; i < height; ++i)
-		for (i32 j = 0; j < width; ++j)
-			for (u32 k = 0; k < num_prims; k++)				
-				rasterize(i, j, k, transformed_prims, vb);
+		for (i32 i = 0; i < height; ++i)
+			for (i32 j = 0; j < width; ++j)
+				for (u32 k = 0; k < num_prims; ++k)
+					rasterize(i, j, k, transformed_prims, vb);
 
-	for (i32 i = 0; i < height; ++i)
-		for (i32 j = 0; j < width; ++j)
-			img_out[i*width + j] = shade(i, j, transformed_prims, vb);
+		for (i32 i = 0; i < height; ++i)
+			for (i32 j = 0; j < width; ++j)
+				img_out[i * width + j] = shade(i, j, transformed_prims, vb);
+	}
 
 	stbi_write_bmp("imgout.bmp", width, height, 4, img_out);
+	stbi_write_png("imgout.png", width, height, 4, img_out, 0);
+	stbi_write_jpg("imgout.jpg", width, height, 4, img_out, 0);
 }
