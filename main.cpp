@@ -17,9 +17,7 @@ typedef unsigned long long u64;
 typedef float f32;
 typedef double f64;
 
-//struct v2 { f32 x, y; };
 struct v3 { f32 x, y, z; };
-//struct v4 { f32 x, y, z, w; };
 struct tri { v3 vert[3]; };
 
 v3 operator+(v3 a, v3 b) { return v3{ a.x + b.x, a.y + b.y, a.z + b.z }; }
@@ -51,16 +49,16 @@ f32 dot(v3 a, v3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 
 f32 absf(f32 x) { return x > -x ? x : -x; }
 
-f32 rcp_sqrt(f32 number) // infamous 'fast reciprocal square root' function
+f32 rcp_sqrt(f32 x) // infamous 'fast reciprocal square root' function
 {
-	i32 i = 0x5f3759df - ((*(i32*)&number) >> 1);
+	i32 i = 0x5f3759df - ((*(i32*)&x) >> 1);
 	f32 y = *(f32*)&i;
-	y = y * (1.5f - (number * 0.5f * y * y)); // 1st iteration
-	y = y * (1.5f - (number * 0.5f * y * y)); // 2nd iteration
+	y = y * (1.5f - (x * 0.5f * y * y)); // 1st iteration
+	y = y * (1.5f - (x * 0.5f * y * y)); // 2nd iteration
 	return y;
 }
 
-v3 normalize(v3 V) { return V * rcp_sqrt(dot(V, V)); }
+v3 normalize(v3 v) { return v * rcp_sqrt(dot(v, v)); }
 
 struct visbuf
 {
@@ -84,8 +82,8 @@ visbuf make_visbuf(i32 width, i32 height)
 // This function rearranges the expression:   z <= decode(vb.z_buf[i * vb.width + j])
 f32 compare_z(f32 z, i32 i, i32 j, const visbuf& vb) { return (z + 1.f) * vb.z_buf[i * vb.width + j] <= 1.f; } 
 
-f32 encode_z(f32 z) { return 1.f/(1.f + z);  }
-f32 decode_z(f32 z) { return (1.f/z) - 1.f; }
+f32 encode_z(f32 z) { return 1.f / (1.f + z);  }
+f32 decode_z(f32 z) { return (1.f / z) - 1.f; }
 
 v3 get_viewdir(i32 i, i32 j, i32 width, i32 height)
 {
@@ -145,7 +143,7 @@ void rasterize(i32 i, i32 j, u32 k, tri* prims, visbuf& vb)
 		)
 	{
 		vb.z_buf[i * vb.width + j] = encode_z(z);
-		vb.prim_buf[i * vb.width + j] = k+1;
+		vb.prim_buf[i * vb.width + j] = k + 1;
 	}
 }
 
@@ -180,10 +178,10 @@ f32 gamma_encode(f32 C_linear)
 {
 	C_linear >= 0.f ? C_linear : 0.f;
 	C_linear <= 1.f ? C_linear : 1.f;
-	return 1. / rcp_sqrt(C_linear);
+	return 1.f / rcp_sqrt(C_linear);
 }
 
-u32 HDRtoLDR(v3 RGB)
+u32 hdr_to_ldr(v3 RGB)
 {
 	u32 R = (u8)(gamma_encode(RGB.x) * 255.f);
 	u32 G = (u8)(gamma_encode(RGB.y) * 255.f);
@@ -219,8 +217,8 @@ u32 shade(i32 i, i32 j, tri* prims, const visbuf& vb)
 		v3 baseColor = rgb_palette[primidx];
 		v3 color = v3{ diffuse,diffuse,diffuse } * baseColor;
 		//color = s.barycentric;
-		u32 LDR = HDRtoLDR(color);
-		return LDR;
+		u32 ldr = hdr_to_ldr(color);
+		return ldr;
 	}
 	else
 		return 0xFF330011;// 0xFF000000;
