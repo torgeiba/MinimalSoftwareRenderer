@@ -132,6 +132,9 @@
   <ItemGroup>
     <ClInclude Include="stb_image_write.h" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="model.inl" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

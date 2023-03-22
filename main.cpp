@@ -1,4 +1,3 @@
-
 #include <corecrt_malloc.h> // for calloc
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -193,7 +192,8 @@ u32 shade(i32 i, i32 j, tri* prims, const visbuf& vb)
 {
 	u32 primbufval = vb.prim_buf[i * vb.width + j]; // note: unsigned value, be careful with subtraction!
 
-	v3 rgb_palette[10] =
+	const i32 palette_size = 10;
+	v3 rgb_palette[palette_size] =
 	{
 		v3{1.f, 1.f, 1.f},
 		v3{1.f, 1.f, 1.f},
@@ -214,7 +214,8 @@ u32 shade(i32 i, i32 j, tri* prims, const visbuf& vb)
 		shading_data s = get_shading_data(i, j, prims, vb);
 		f32 NdotV = dot(s.normaldir, s.viewdir);
 		f32 diffuse = NdotV >= 0.f ? NdotV : 0.f;
-		v3 baseColor = rgb_palette[primidx];
+		i32 palette_idx = primidx % palette_size;
+		v3 baseColor = rgb_palette[palette_idx];
 		v3 color = v3{ diffuse,diffuse,diffuse } * baseColor;
 		//color = s.barycentric;
 		u32 ldr = hdr_to_ldr(color);
@@ -224,64 +225,50 @@ u32 shade(i32 i, i32 j, tri* prims, const visbuf& vb)
 		return 0xFF330011;// 0xFF000000;
 }
 
-tri transform(u32 k, tri* prim)
-{
-	tri result = tri{{
-		prim[k].vert[0] * 0.5 - v3{0.f, 0.f, 0.5f},
-		prim[k].vert[1] * 0.5 - v3{0.f, 0.f, 0.5f},
-		prim[k].vert[2] * 0.5 - v3{0.f, 0.f, 0.5f}
-	}};
-	return result;
+#include "model.inl"
+
+v3 transform_vert(v3 v)
+{	
+	return	v * (20.f) + v3{ 0.65f, -1.65f, -2.75f };
 }
+	
+
+f32 min(f32 a, f32 b) { return a < b ? a : b; }
+f32 max(f32 a, f32 b) { return a > b ? a : b; }
 
 i32 main(i32 argc, char* argv[])
 {
-	const i32 width = 600, height = 600; // width and height have to be equal as long as we don't aspect correct
-	const i32 num_prims = 10;
-	v3 v[8]
-	{
-		{-1.f, -1.f, -1.f},
-		{ 1.f, -1.f, -1.f},
-		{ 1.f,  1.f, -1.f},
-		{-1.f,  1.f, -1.f},
-		{-1.f, -1.f, -2.f},
-		{ 1.f, -1.f, -2.f},
-		{ 1.f,  1.f, -2.f},
-		{-1.f,  1.f, -2.f},
-	};
-	tri prims[num_prims] =
-	{
-		{ { v[0], v[1], v[5] }},
-		{ { v[0], v[5], v[4] }},
-		{ { v[1], v[2], v[5] }},
-		{ { v[2], v[6], v[5] }},
-		{ { v[2], v[7], v[6] }},
-		{ { v[2], v[3], v[7] }},
-		{ { v[4], v[5], v[6] }},
-		{ { v[4], v[6], v[7] }},
-		{ { v[0], v[4], v[3] }},
-		{ { v[3], v[4], v[7] }}
-	};
+	const i32 width = 1000, height = 1000; // width and height have to be equal as long as we don't aspect correct
 
-	tri transformed_prims[num_prims];
 	u32* img_out = (u32*)calloc(width * height, sizeof(u32));
 	if (!img_out) return 0;
 
+	tri* triangles = (tri*)calloc(num_faces, sizeof(tri));
+	if (!triangles) return 0;
 	// void draw(width, height, vb, num_prims, prims)
 	{
 		visbuf vb = make_visbuf(width, height);
 
-		for (u32 k = 0; k < num_prims; ++k)
-			transformed_prims[k] = transform(k, prims); // transform per triangle, should transform per vertex instead...
+		for (u32 k = 0; k < num_faces; ++k)
+		{
+			tri t =
+			{ {
+				transform_vert({verts[faces[k][0]][0],verts[faces[k][0]][1], verts[faces[k][0]][2]}),
+				transform_vert({verts[faces[k][1]][0],verts[faces[k][1]][1], verts[faces[k][1]][2]}),
+				transform_vert({verts[faces[k][2]][0],verts[faces[k][2]][1], verts[faces[k][2]][2]})
+			} };
+			triangles[k] = t; 
+
+		}
+
+		for (u32 k = 0; k < num_faces; ++k)
+				for (i32 i = 0; i < height; ++i)
+					for (i32 j = 0; j < width; ++j)
+						rasterize(i, j, k, triangles, vb);
 
 		for (i32 i = 0; i < height; ++i)
 			for (i32 j = 0; j < width; ++j)
-				for (u32 k = 0; k < num_prims; ++k)
-					rasterize(i, j, k, transformed_prims, vb);
-
-		for (i32 i = 0; i < height; ++i)
-			for (i32 j = 0; j < width; ++j)
-				img_out[i * width + j] = shade(i, j, transformed_prims, vb);
+				img_out[i * width + j] = shade(i, j, triangles, vb);
 	}
 
 	stbi_write_bmp("imgout.bmp", width, height, 4, img_out);
